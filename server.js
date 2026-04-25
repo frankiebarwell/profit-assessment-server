@@ -994,6 +994,33 @@ app.post('/report/:meetingId', async (req, res) => {
   }
 });
 
+// Simulator demo: sample law firm data for previewing the tool
+app.get('/simulator/demo', requireAuth, (req, res) => {
+  const demoData = {
+    clientName: 'Demo Client',
+    companyName: 'Sample Law Firm',
+    industry: 'Law Firm',
+    revenue: 2000000,
+    gpm: 68,
+    npm: 18,
+    levers: [
+      { id: 'cut_costs',           name: 'Cut Costs',                      type: 'cost',    pct: 7   },
+      { id: 'mdp',                 name: 'Market-Dominating Position',     type: 'revenue', pct: 5   },
+      { id: 'compelling_offer',    name: 'Compelling Offer',               type: 'revenue', pct: 4   },
+      { id: 'increase_prices',     name: 'Increase Prices',                type: 'revenue', pct: 5   },
+      { id: 'upsell_crosssell',    name: 'Upsell & Cross-Sell',           type: 'revenue', pct: 6   },
+      { id: 'bundling',            name: 'Bundling',                       type: 'revenue', pct: 3   },
+      { id: 'downsell',            name: 'Downsell',                       type: 'revenue', pct: 2   },
+      { id: 'additional_products', name: 'Additional Products & Services', type: 'revenue', pct: 3   },
+      { id: 'drip_campaign',       name: 'Drip Campaign',                  type: 'revenue', pct: 5   },
+      { id: 'alliances_jv',        name: 'Alliances & Joint Ventures',     type: 'revenue', pct: 4   },
+      { id: 'more_leads',          name: 'More Leads',                     type: 'revenue', pct: 6   },
+      { id: 'digital_marketing',   name: 'Digital Marketing',              type: 'revenue', pct: 4   },
+    ]
+  };
+  res.send(buildSimulatorHtml(demoData, 'demo'));
+});
+
 // Simulator: pre-populated interactive profit calculator
 app.get('/simulator/:meetingId', (req, res) => {
   const { meetingId } = req.params;
