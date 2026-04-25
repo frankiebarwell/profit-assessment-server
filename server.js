@@ -994,6 +994,119 @@ app.post('/report/:meetingId', async (req, res) => {
   }
 });
 
+// Test: inject a sample transcript to simulate a Fireflies webhook
+app.get('/test', requireAuth, async (req, res) => {
+  const meetingId = 'test-' + Date.now();
+
+  const sampleTranscript = `
+Frankie: Thanks for joining today. Can you tell me a bit about why you started the firm and what your role looks like day to day?
+
+Client: Sure. I started Smith and Associates about eight years ago. I was a senior associate at a big firm and just got tired of building someone else's book. I do mostly commercial litigation and some employment work. Day to day I'm probably 70 percent fee earning, 30 percent managing the business. We've got four fee earners including me and two support staff.
+
+Frankie: Where do you want to be in five years?
+
+Client: Honestly I'd like to step back a bit from fee earning. Maybe get to a point where I'm more of a managing partner role. But right now the firm needs me billing to stay afloat, which is the problem.
+
+Frankie: What are the three biggest problems you face right now?
+
+Client: First is that revenue has been pretty flat for three years. We're around two million a year and I can't seem to break through that ceiling. Second is that my margins are thinner than they should be. I know we're writing off too much time and I've never really dealt with it properly. Third is new business — it's almost entirely referrals and I have no real system for generating leads consistently.
+
+Frankie: What did the firm bill last financial year?
+
+Client: Just under two million. About 1.95 million.
+
+Frankie: And what's your gross profit margin looking like?
+
+Client: I'd estimate around 60 percent after direct costs. Fee earner salaries, PI insurance, that kind of thing.
+
+Frankie: Net profit margin?
+
+Client: Probably around 15 percent. So we're taking home maybe 280 to 300 thousand after everything. Which sounds okay until you think about the hours I'm putting in.
+
+Frankie: When did you last review your vendor and subscription costs?
+
+Client: Honestly, never in any structured way. We're probably paying for things we don't use.
+
+Frankie: What's your write-off rate like?
+
+Client: It's bad. Probably 12 to 15 percent across the firm. It's a culture thing — fee earners just discount bills to avoid uncomfortable conversations with clients. I've never put a formal approval process in place.
+
+Frankie: If I asked your clients why they chose you, what would they say?
+
+Client: They'd say we're responsive and commercial. We don't over-lawyer things. But I couldn't tell you what makes us genuinely different from three other firms they could have called.
+
+Frankie: Do you have a compelling offer for new clients, any risk reversal?
+
+Client: No. It's pretty standard — here's our hourly rate, sign the engagement letter. Nothing that makes it particularly easy to say yes.
+
+Frankie: When did you last raise your rates?
+
+Client: About two years ago. We went up about five percent. I was nervous about losing clients but we didn't lose a single one.
+
+Frankie: Do you proactively offer additional services to existing clients?
+
+Client: Not really. We wait for them to come back. Which they do, but I'm sure we're missing a lot.
+
+Frankie: What happens when someone says your fees are too high?
+
+Client: We usually just lose them. We don't have a lower-cost entry point or anything structured.
+
+Frankie: How many strategic referral relationships do you have?
+
+Client: Informal ones, a handful of accountants who send us work. Nothing formal or measured on either side.
+
+Frankie: When a prospect has an initial consult and doesn't proceed immediately, what's your follow-up?
+
+Client: Probably one follow-up email. Maybe two. Then we move on. I know that's not good enough.
+
+Frankie: What's your digital presence like?
+
+Client: The website is old. We get some enquiries from it but not many. We're barely on social media. Google reviews — we have about six, which is embarrassing compared to some competitors.
+
+Frankie: What would a 20 percent increase in profit mean for you personally?
+
+Client: It would mean I could hire another fee earner and actually start stepping back. It would change everything honestly.
+
+Frankie: What's stopped you from being more profitable so far?
+
+Client: Time and knowing where to start. I know the problems but I'm too busy billing to fix them.
+  `;
+
+  assessmentStore[meetingId] = {
+    title: 'John Smith — Smith & Associates (TEST)',
+    transcript: sampleTranscript,
+    analysis: null,
+    simulatorData: null
+  };
+
+  res.send(`<html><body style="font-family:Arial;padding:40px;max-width:600px">
+    <h2 style="color:#1A2744">Test transcript loaded.</h2>
+    <p>A sample law firm transcript has been injected. The Phase 1 notification email is on its way.</p>
+    <p style="margin-top:16px">Check your inbox for the <strong>Generate Profit Analysis</strong> button, then click through the full pipeline.</p>
+    <p style="color:#888;margin-top:24px">Revenue Hounds Profit Assessment System</p>
+  </body></html>`);
+
+  try {
+    await transporter.sendMail({
+      from: GMAIL_USER,
+      to: NOTIFY_EMAIL,
+      subject: `JumpStart 30 Assessment for John Smith — Smith & Associates (TEST) is Ready`,
+      html: `
+        <p><strong>TEST: A sample Profit Assessment transcript is ready.</strong></p>
+        <p><strong>Client:</strong> John Smith — Smith & Associates</p>
+        <p><strong>Transcript length:</strong> ${sampleTranscript.split(' ').length} words</p>
+        <p><strong>Meeting ID:</strong> ${meetingId}</p>
+        <p>Click below to run the full analysis:</p>
+        <p><a href="${SERVER_URL}/analyse/${meetingId}" style="background:#1A2744;color:#C8A951;padding:12px 24px;text-decoration:none;font-weight:bold;border-radius:4px">Generate Profit Analysis</a></p>
+        <br><p style="color:#888">Revenue Hounds Profit Assessment System</p>
+      `
+    });
+    console.log('Test transcript loaded, meetingId:', meetingId);
+  } catch (err) {
+    console.error('Test email error:', err.message);
+  }
+});
+
 // Simulator demo: sample law firm data for previewing the tool
 app.get('/simulator/demo', requireAuth, (req, res) => {
   const demoData = {
