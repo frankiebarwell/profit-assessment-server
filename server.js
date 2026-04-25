@@ -1,9 +1,11 @@
 const express = require('express');
 const fetch = require('node-fetch');
 const nodemailer = require('nodemailer');
+const crypto = require('crypto');
 
 const app = express();
 app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
 
 const {
   FIREFLIES_API_KEY,
@@ -11,8 +13,109 @@ const {
   GMAIL_USER,
   GMAIL_APP_PASSWORD,
   NOTIFY_EMAIL,
-  SERVER_URL = 'https://profit-assessment-server.up.railway.app'
+  SERVER_URL = 'https://profit-assessment-server.up.railway.app',
+  ADMIN_PASSWORD = 'changeme'
 } = process.env;
+
+// ── Auth helpers ─────────────────────────────────────────────────────────────
+
+function getAuthToken() {
+  return crypto.createHash('sha256').update(ADMIN_PASSWORD + 'rh-salt').digest('hex');
+}
+
+function parseCookies(req) {
+  const cookies = {};
+  (req.headers.cookie || '').split(';').forEach(c => {
+    const [k, ...v] = c.trim().split('=');
+    if (k) cookies[k.trim()] = v.join('=').trim();
+  });
+  return cookies;
+}
+
+function requireAuth(req, res, next) {
+  if (parseCookies(req).rh_auth === getAuthToken()) return next();
+  res.redirect('/login');
+}
+
+// ── HTML templates ────────────────────────────────────────────────────────────
+
+const STYLES = `
+  body { font-family: Arial, sans-serif; background: #f4f4f4; margin: 0; padding: 0; }
+  .wrap { max-width: 560px; margin: 60px auto; background: #fff; border-radius: 6px; overflow: hidden; box-shadow: 0 2px 12px rgba(0,0,0,0.1); }
+  .header { background: #1A2744; padding: 28px 36px; }
+  .header h1 { color: #C8A951; margin: 0; font-size: 20px; letter-spacing: 0.5px; }
+  .header p { color: #a0aac0; margin: 4px 0 0; font-size: 13px; }
+  .body { padding: 36px; }
+  label { display: block; font-size: 13px; font-weight: bold; color: #1A2744; margin-bottom: 6px; margin-top: 20px; }
+  label:first-of-type { margin-top: 0; }
+  input[type=text], input[type=password], select { width: 100%; box-sizing: border-box; padding: 10px 12px; border: 1px solid #ddd; border-radius: 4px; font-size: 14px; color: #333; }
+  input[type=text]:focus, input[type=password]:focus, select:focus { outline: none; border-color: #1A2744; }
+  .btn { display: inline-block; margin-top: 28px; width: 100%; box-sizing: border-box; background: #1A2744; color: #C8A951; padding: 13px; border: none; border-radius: 4px; font-size: 15px; font-weight: bold; cursor: pointer; text-align: center; }
+  .btn:hover { background: #243660; }
+  .error { background: #fff0f0; border: 1px solid #f5c6cb; color: #721c24; padding: 10px 14px; border-radius: 4px; font-size: 13px; margin-bottom: 20px; }
+  .footer { text-align: center; padding: 16px; font-size: 12px; color: #aaa; background: #fafafa; border-top: 1px solid #eee; }
+  #other-wrap { display: none; margin-top: 10px; }
+`;
+
+function loginPage(error) {
+  return `<!DOCTYPE html><html><head><title>Revenue Hounds — Login</title><style>${STYLES}</style></head><body>
+  <div class="wrap">
+    <div class="header"><h1>Revenue Hounds</h1><p>JumpStart 30 Profit Assessment System</p></div>
+    <div class="body">
+      ${error ? `<div class="error">${error}</div>` : ''}
+      <form method="POST" action="/login">
+        <label for="password">Password</label>
+        <input type="password" id="password" name="password" placeholder="Enter your password" autofocus required>
+        <button class="btn" type="submit">Sign In</button>
+      </form>
+    </div>
+    <div class="footer">Revenue Hounds Profit Assessment System</div>
+  </div>
+</body></html>`;
+}
+
+function adminPage(success) {
+  const industries = [
+    'Law Firm', 'Accounting Firm', 'Medical Practice', 'Dental Practice',
+    'Financial Planning', 'Real Estate Agency', 'Insurance', 'Consulting',
+    'Construction', 'Retail', 'Restaurant / Hospitality', 'Other'
+  ];
+  return `<!DOCTYPE html><html><head><title>Revenue Hounds — Pre-Call Prep</title><style>${STYLES}
+  .success { background: #f0fff4; border: 1px solid #b2dfdb; color: #1b5e20; padding: 10px 14px; border-radius: 4px; font-size: 13px; margin-bottom: 20px; }
+  </style></head><body>
+  <div class="wrap">
+    <div class="header"><h1>Revenue Hounds</h1><p>JumpStart 30 — Pre-Call Interview Guide</p></div>
+    <div class="body">
+      ${success ? `<div class="success">Guide requested. Check your email in approximately 60 seconds.</div>` : ''}
+      <form method="GET" action="/prep">
+        <label for="client">Client Name</label>
+        <input type="text" id="client" name="client" placeholder="e.g. John Smith" required>
+        <label for="company">Company / Firm Name</label>
+        <input type="text" id="company" name="company" placeholder="e.g. Smith &amp; Associates">
+        <label for="industry">Industry</label>
+        <select id="industry" name="industry" onchange="document.getElementById('other-wrap').style.display=this.value==='Other'?'block':'none'" required>
+          <option value="">— Select industry —</option>
+          ${industries.map(i => `<option value="${i}">${i}</option>`).join('')}
+        </select>
+        <div id="other-wrap">
+          <input type="text" id="industry-other" name="industry_other" placeholder="Describe the industry">
+        </div>
+        <button class="btn" type="submit" onclick="handleSubmit(event)">Generate Interview Guide</button>
+      </form>
+    </div>
+    <div class="footer"><a href="/logout" style="color:#aaa;text-decoration:none">Sign out</a> &nbsp;·&nbsp; Revenue Hounds Profit Assessment System</div>
+  </div>
+  <script>
+    function handleSubmit(e) {
+      const other = document.getElementById('industry-other');
+      const sel = document.getElementById('industry');
+      if (sel.value === 'Other' && other.value.trim()) {
+        sel.value = other.value.trim();
+      }
+    }
+  </script>
+</body></html>`;
+}
 
 // ── Gmail transport ──────────────────────────────────────────────────────────
 
@@ -54,12 +157,13 @@ async function fetchTranscript(meetingId) {
 
 // ── Claude: generate pre-call interview guide ────────────────────────────────
 
-async function generateInterviewGuide(clientName, industry) {
+async function generateInterviewGuide(clientName, companyName, industry) {
   const prompt = `Do not use emojis. Do not use markdown formatting — no #, ##, **, or similar symbols. Write in plain professional text only, using capitalised section headings and clear paragraph breaks.
 
 You are a senior business profit consultant preparing for a 30-minute JumpStart 30 Profit Assessment session with a prospective client. The JumpStart 30 system identifies small, compounding improvements across 12 profit levers to produce measurable profit increases within 30 days.
 
 Client name: ${clientName || 'Not specified'}
+Company / Firm name: ${companyName || 'Not specified'}
 Industry: ${industry}
 
 Your job is to prepare a targeted pre-call interview guide that will make the most of 30 minutes. The questions should be tailored specifically to the realities, terminology, and profit patterns of the ${industry} industry. Do not use generic business questions — every question should feel like it came from someone who deeply understands this sector.
@@ -306,38 +410,55 @@ const assessmentStore = {};
 
 // ── Routes ───────────────────────────────────────────────────────────────────
 
-// Health check
-app.get('/', (req, res) => res.send('JumpStart 30 Profit Assessment Server running.'));
+// ── Auth routes ───────────────────────────────────────────────────────────────
+
+app.get('/', (req, res) => {
+  if (parseCookies(req).rh_auth === getAuthToken()) return res.redirect('/admin');
+  res.redirect('/login');
+});
+
+app.get('/login', (req, res) => res.send(loginPage()));
+
+app.post('/login', (req, res) => {
+  if (req.body.password === ADMIN_PASSWORD) {
+    res.setHeader('Set-Cookie', `rh_auth=${getAuthToken()}; HttpOnly; Path=/; Max-Age=86400`);
+    return res.redirect('/admin');
+  }
+  res.send(loginPage('Incorrect password. Please try again.'));
+});
+
+app.get('/logout', (req, res) => {
+  res.setHeader('Set-Cookie', 'rh_auth=; HttpOnly; Path=/; Max-Age=0');
+  res.redirect('/login');
+});
+
+app.get('/admin', requireAuth, (req, res) => {
+  res.send(adminPage(req.query.success === '1'));
+});
 
 // Pre-call prep: GET /prep?client=Name&industry=law+firm
-app.get('/prep', async (req, res) => {
-  const { client, industry } = req.query;
+app.get('/prep', requireAuth, async (req, res) => {
+  const { client, company, industry } = req.query;
 
-  if (!industry) {
-    return res.status(400).send(`<html><body style="font-family:Arial;padding:40px">
-      <h2>Missing industry parameter</h2>
-      <p>Usage: /prep?industry=law+firm&client=ClientName</p>
-    </body></html>`);
-  }
+  if (!industry) return res.redirect('/admin');
 
-  res.send(`<html><body style="font-family:Arial;padding:40px;max-width:600px">
-    <h2 style="color:#1A2744">Generating pre-call interview guide...</h2>
-    <p>A tailored JumpStart 30 interview guide for the <strong>${industry}</strong> industry is being prepared. You will receive it by email in approximately 60 seconds.</p>
-    <p style="color:#888">Revenue Hounds Profit Assessment System</p>
-  </body></html>`);
+  // Redirect back immediately so the user sees the success state
+  res.redirect('/admin?success=1');
 
-  console.log(`Pre-call prep requested: client=${client || 'not specified'}, industry=${industry}`);
+  const label = [client, company ? `(${company})` : ''].filter(Boolean).join(' ');
+  console.log(`Pre-call prep requested: client=${label || 'not specified'}, industry=${industry}`);
 
   try {
-    const guide = await generateInterviewGuide(client, industry);
+    const guide = await generateInterviewGuide(client, company, industry);
 
     await transporter.sendMail({
       from: GMAIL_USER,
       to: NOTIFY_EMAIL,
-      subject: `Pre-Call Interview Guide — ${industry}${client ? ` (${client})` : ''}`,
+      subject: `Pre-Call Interview Guide — ${industry}${label ? ` · ${label}` : ''}`,
       html: `
         <p><strong>Your JumpStart 30 pre-call interview guide is ready.</strong></p>
         ${client ? `<p><strong>Client:</strong> ${client}</p>` : ''}
+        ${company ? `<p><strong>Company:</strong> ${company}</p>` : ''}
         <p><strong>Industry:</strong> ${industry}</p>
         <hr>
         <pre style="font-family:Arial;font-size:14px;white-space:pre-wrap">${guide}</pre>
