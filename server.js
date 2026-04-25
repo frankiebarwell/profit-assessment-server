@@ -404,8 +404,302 @@ ${analysisText}`;
   return data.content[0].text;
 }
 
+// ── Claude: extract simulator data from analysis ─────────────────────────────
+
+const LEVER_DEFINITIONS = [
+  { id: 'cut_costs',          name: 'Cut Costs',                      type: 'cost'    },
+  { id: 'mdp',                name: 'Market-Dominating Position',     type: 'revenue' },
+  { id: 'compelling_offer',   name: 'Compelling Offer',               type: 'revenue' },
+  { id: 'increase_prices',    name: 'Increase Prices',                type: 'revenue' },
+  { id: 'upsell_crosssell',   name: 'Upsell & Cross-Sell',           type: 'revenue' },
+  { id: 'bundling',           name: 'Bundling',                       type: 'revenue' },
+  { id: 'downsell',           name: 'Downsell',                       type: 'revenue' },
+  { id: 'additional_products',name: 'Additional Products & Services', type: 'revenue' },
+  { id: 'drip_campaign',      name: 'Drip Campaign',                  type: 'revenue' },
+  { id: 'alliances_jv',       name: 'Alliances & Joint Ventures',     type: 'revenue' },
+  { id: 'more_leads',         name: 'More Leads',                     type: 'revenue' },
+  { id: 'digital_marketing',  name: 'Digital Marketing',              type: 'revenue' },
+];
+
+async function extractSimulatorData(analysisText) {
+  const prompt = `You are extracting structured data from a profit analysis report. Return ONLY valid JSON — no explanation, no markdown, no code fences.
+
+Extract the following fields:
+- clientName: string
+- companyName: string
+- industry: string
+- revenue: annual revenue as a plain number (no symbols or commas)
+- gpm: gross profit margin as a number 0-100 (e.g. 53 for 53%)
+- npm: net profit margin as a number 0-100 (e.g. 16 for 16%)
+- levers: array of 12 objects, one per lever, each with:
+  - id: one of: cut_costs, mdp, compelling_offer, increase_prices, upsell_crosssell, bundling, downsell, additional_products, drip_campaign, alliances_jv, more_leads, digital_marketing
+  - pct: realistic improvement percentage as a number 0-15 based on what was discussed (use 0 if not discussed or low opportunity)
+
+If revenue/gpm/npm were not clearly stated, estimate from context. Return all 12 levers — use 0 for any not assessed.
+
+ANALYSIS:
+${analysisText}`;
+
+  const response = await fetch('https://api.anthropic.com/v1/messages', {
+    method: 'POST',
+    headers: {
+      'x-api-key': ANTHROPIC_API_KEY,
+      'anthropic-version': '2023-06-01',
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify({
+      model: 'claude-haiku-4-5-20251001',
+      max_tokens: 1024,
+      messages: [{ role: 'user', content: prompt }]
+    })
+  });
+
+  const data = await response.json();
+  if (!data?.content?.[0]?.text) throw new Error('No content from Claude for simulator extraction');
+
+  const raw = data.content[0].text.trim().replace(/^```json?\n?/, '').replace(/\n?```$/, '');
+  const extracted = JSON.parse(raw);
+
+  // Merge extracted lever pcts into canonical definitions
+  const leverMap = {};
+  (extracted.levers || []).forEach(l => { leverMap[l.id] = l.pct || 0; });
+  extracted.levers = LEVER_DEFINITIONS.map(def => ({
+    ...def,
+    pct: leverMap[def.id] || 0
+  }));
+
+  return extracted;
+}
+
+// ── Simulator HTML builder ────────────────────────────────────────────────────
+
+function buildSimulatorHtml(data, meetingId) {
+  const clientLabel = [data.clientName, data.companyName].filter(Boolean).join(' — ');
+  const industryLabel = data.industry || '';
+
+  const leverRows = data.levers.map(lever => {
+    const pct = lever.pct || 0;
+    const typeLabel = lever.type === 'cost' ? 'cost reduction' : 'revenue lever';
+    return `<div class="lever-row">
+      <div>
+        <div class="lever-name">${lever.name}</div>
+        <div class="lever-type">${typeLabel}</div>
+      </div>
+      <input type="range" id="slider_${lever.id}" min="0" max="15" step="0.5" value="${pct}"
+        oninput="sync('${lever.id}', this.value)">
+      <div class="pct-wrap">
+        <input type="number" class="pct-input" id="pct_${lever.id}" value="${pct}"
+          min="0" max="15" step="0.5" oninput="sync('${lever.id}', this.value)">
+        <span class="pct-sign">%</span>
+      </div>
+      <div class="lever-impact" id="impact_${lever.id}">—</div>
+    </div>`;
+  }).join('\n');
+
+  const leversJson = JSON.stringify(data.levers);
+
+  return `<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Profit Simulator — ${clientLabel}</title>
+<style>
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{font-family:Arial,sans-serif;background:#eef0f4;min-height:100vh}
+  .topbar{background:#1A2744;padding:16px 28px;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px}
+  .topbar-left h1{color:#C8A951;font-size:17px;letter-spacing:0.4px}
+  .topbar-left p{color:#7a8fb0;font-size:12px;margin-top:2px}
+  .client-badge{background:rgba(200,169,81,0.12);border:1px solid rgba(200,169,81,0.4);border-radius:4px;padding:8px 16px;text-align:right}
+  .client-badge .name{color:#C8A951;font-size:13px;font-weight:bold}
+  .client-badge .sub{color:#7a8fb0;font-size:11px;margin-top:2px}
+  .container{max-width:1120px;margin:0 auto;padding:24px 16px}
+  .baseline{background:#fff;border-radius:8px;padding:22px 24px;margin-bottom:20px;border:1px solid #dde0e8}
+  .section-title{font-size:12px;font-weight:bold;color:#1A2744;text-transform:uppercase;letter-spacing:0.6px;margin-bottom:16px}
+  .baseline-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:16px}
+  .field label{display:block;font-size:11px;font-weight:bold;color:#666;text-transform:uppercase;letter-spacing:0.4px;margin-bottom:6px}
+  .field input{width:100%;padding:10px 12px;border:1px solid #ddd;border-radius:4px;font-size:17px;font-weight:bold;color:#1A2744}
+  .field input:focus{outline:none;border-color:#1A2744}
+  .field .hint{font-size:11px;color:#aaa;margin-top:4px}
+  .layout{display:grid;grid-template-columns:1fr 300px;gap:20px;align-items:start}
+  .levers-card{background:#fff;border-radius:8px;border:1px solid #dde0e8;overflow:hidden}
+  .levers-card-header{padding:18px 24px 14px;border-bottom:1px solid #f0f0f0}
+  .lever-row{display:grid;grid-template-columns:200px 1fr 76px 108px;align-items:center;gap:12px;padding:13px 24px;border-bottom:1px solid #f5f5f5;transition:background 0.15s}
+  .lever-row:last-child{border-bottom:none}
+  .lever-row:hover{background:#f8f9fd}
+  .lever-name{font-size:13px;font-weight:600;color:#222}
+  .lever-type{font-size:10px;color:#aaa;margin-top:2px;text-transform:uppercase;letter-spacing:0.3px}
+  input[type=range]{width:100%;accent-color:#1A2744;cursor:pointer}
+  .pct-wrap{display:flex;align-items:center;gap:4px}
+  .pct-input{width:52px;padding:7px 8px;border:1px solid #ddd;border-radius:4px;font-size:14px;font-weight:bold;color:#1A2744;text-align:center}
+  .pct-input:focus{outline:none;border-color:#1A2744}
+  .pct-sign{font-size:13px;color:#888}
+  .lever-impact{font-size:13px;font-weight:bold;color:#2e7d32;text-align:right}
+  .lever-impact.zero{color:#ccc;font-weight:normal}
+  .results{background:#1A2744;border-radius:8px;color:#fff;position:sticky;top:20px}
+  .results-header{padding:18px 22px 14px;border-bottom:1px solid rgba(255,255,255,0.08)}
+  .results-header .section-title{color:#C8A951}
+  .result-block{padding:16px 22px;border-bottom:1px solid rgba(255,255,255,0.06)}
+  .result-label{font-size:10px;color:#6a82a0;text-transform:uppercase;letter-spacing:0.4px;margin-bottom:4px}
+  .result-value{font-size:22px;font-weight:bold;color:#fff}
+  .result-value.gold{color:#C8A951}
+  .result-value.green{color:#81c784}
+  .result-value.big{font-size:30px}
+  .growth-wrap{padding:14px 22px;border-bottom:1px solid rgba(255,255,255,0.06)}
+  .growth-bar-bg{background:rgba(255,255,255,0.1);border-radius:4px;height:7px;overflow:hidden;margin:8px 0 4px}
+  .growth-bar{height:100%;background:#C8A951;border-radius:4px;transition:width 0.25s;width:0%}
+  .growth-pct{font-size:13px;color:#C8A951;text-align:right;font-weight:bold}
+  .result-hero{padding:22px;background:rgba(200,169,81,0.1);border-top:2px solid #C8A951}
+  .result-hero .result-label{color:#C8A951}
+  .result-hero .result-value{color:#C8A951;font-size:32px}
+  .results-note{padding:14px 22px;font-size:11px;color:#3a4f6a;text-align:center;line-height:1.5}
+  @media(max-width:800px){.layout{grid-template-columns:1fr}.lever-row{grid-template-columns:1fr 76px}.lever-row>input[type=range]{display:none}.results{position:static}.baseline-grid{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+
+<div class="topbar">
+  <div class="topbar-left">
+    <h1>Revenue Hounds</h1>
+    <p>JumpStart 30 — Profit Acceleration Simulator</p>
+  </div>
+  <div class="client-badge">
+    <div class="name">${clientLabel || 'Client Assessment'}</div>
+    <div class="sub">${industryLabel}</div>
+  </div>
+</div>
+
+<div class="container">
+
+  <div class="baseline">
+    <div class="section-title">Baseline Numbers</div>
+    <div class="baseline-grid">
+      <div class="field">
+        <label>Annual Revenue</label>
+        <input type="number" id="revenue" value="${data.revenue || 0}" oninput="recalc()">
+        <div class="hint">Total annual revenue</div>
+      </div>
+      <div class="field">
+        <label>Gross Profit Margin %</label>
+        <input type="number" id="gpm" value="${data.gpm || 0}" min="0" max="100" step="0.1" oninput="recalc()">
+        <div class="hint">Revenue minus direct costs</div>
+      </div>
+      <div class="field">
+        <label>Net Profit Margin %</label>
+        <input type="number" id="npm" value="${data.npm || 0}" min="0" max="100" step="0.1" oninput="recalc()">
+        <div class="hint">After all expenses</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="layout">
+
+    <div class="levers-card">
+      <div class="levers-card-header">
+        <div class="section-title">The 12 Profit Levers — Adjust to Explore Scenarios</div>
+      </div>
+      ${leverRows}
+    </div>
+
+    <div class="results">
+      <div class="results-header"><div class="section-title">Profit Projection</div></div>
+
+      <div class="result-block">
+        <div class="result-label">Current Annual Profit</div>
+        <div class="result-value" id="r-current">$0</div>
+      </div>
+
+      <div class="result-block">
+        <div class="result-label">Projected Annual Profit</div>
+        <div class="result-value green" id="r-projected">$0</div>
+      </div>
+
+      <div class="result-block">
+        <div class="result-label">Annual Profit Increase</div>
+        <div class="result-value gold" id="r-increase">$0</div>
+      </div>
+
+      <div class="growth-wrap">
+        <div class="result-label">Profit Growth</div>
+        <div class="growth-bar-bg"><div class="growth-bar" id="r-bar"></div></div>
+        <div class="growth-pct" id="r-pct">0%</div>
+      </div>
+
+      <div class="result-hero">
+        <div class="result-label">5-Year Profit Impact</div>
+        <div class="result-value big" id="r-5yr">$0</div>
+      </div>
+
+      <div class="results-note">
+        Improvements compound multiplicatively.<br>
+        Adjust any lever to explore scenarios.
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<script>
+const levers = ${leversJson};
+
+function fmt(n) {
+  if (n >= 1000000) return '$' + (n / 1000000).toFixed(2) + 'M';
+  return '$' + Math.round(n).toLocaleString('en-US');
+}
+
+function sync(id, val) {
+  const n = Math.min(15, Math.max(0, parseFloat(val) || 0));
+  document.getElementById('slider_' + id).value = n;
+  document.getElementById('pct_' + id).value = n;
+  recalc();
+}
+
+function recalc() {
+  const revenue = parseFloat(document.getElementById('revenue').value) || 0;
+  const npm = parseFloat(document.getElementById('npm').value) / 100 || 0;
+  const currentProfit = revenue * npm;
+
+  // All 12 levers compound multiplicatively against current profit
+  let multiplier = 1;
+  levers.forEach(lever => {
+    const pct = parseFloat(document.getElementById('pct_' + lever.id).value) || 0;
+    multiplier *= (1 + pct / 100);
+
+    // Individual lever impact (simplified first-order)
+    const impact = currentProfit * (pct / 100);
+    const el = document.getElementById('impact_' + lever.id);
+    if (el) {
+      if (pct <= 0) {
+        el.textContent = '—';
+        el.className = 'lever-impact zero';
+      } else {
+        el.textContent = '+' + fmt(impact);
+        el.className = 'lever-impact';
+      }
+    }
+  });
+
+  const projectedProfit = currentProfit * multiplier;
+  const increase = projectedProfit - currentProfit;
+  const growthPct = currentProfit > 0 ? (increase / currentProfit) * 100 : 0;
+  const fiveYear = increase * 5;
+
+  document.getElementById('r-current').textContent = fmt(currentProfit);
+  document.getElementById('r-projected').textContent = fmt(projectedProfit);
+  document.getElementById('r-increase').textContent = '+' + fmt(increase);
+  document.getElementById('r-pct').textContent = Math.round(growthPct) + '%';
+  document.getElementById('r-bar').style.width = Math.min(100, growthPct / 1.5) + '%';
+  document.getElementById('r-5yr').textContent = fmt(fiveYear);
+}
+
+recalc();
+</script>
+</body>
+</html>`;
+}
+
 // ── In-memory store for pending assessments ──────────────────────────────────
-// Maps meetingId -> { title, transcript, analysis }
+// Maps meetingId -> { title, transcript, analysis, simulatorData }
 const assessmentStore = {};
 
 // ── Routes ───────────────────────────────────────────────────────────────────
@@ -531,6 +825,20 @@ app.get('/analyse/:meetingId', async (req, res) => {
     const analysis = await analyseTranscript(assessment.transcript);
     assessmentStore[meetingId].analysis = analysis;
 
+    // Extract simulator data in parallel (uses Haiku — fast and cheap)
+    let simulatorData = null;
+    try {
+      simulatorData = await extractSimulatorData(analysis);
+      assessmentStore[meetingId].simulatorData = simulatorData;
+      console.log('Phase 2 GET: Simulator data extracted for:', assessment.title);
+    } catch (simErr) {
+      console.error('Phase 2 GET: Simulator extraction failed (non-fatal):', simErr.message);
+    }
+
+    const simulatorBtn = simulatorData
+      ? `<p style="margin-top:12px"><a href="${SERVER_URL}/simulator/${meetingId}" style="background:#C8A951;color:#1A2744;padding:12px 24px;text-decoration:none;font-weight:bold;border-radius:4px">Open Profit Simulator</a></p>`
+      : '';
+
     await transporter.sendMail({
       from: GMAIL_USER,
       to: NOTIFY_EMAIL,
@@ -544,6 +852,7 @@ app.get('/analyse/:meetingId', async (req, res) => {
         <hr>
         <p>When you are ready to generate the client-facing Profit Acceleration Report, click below:</p>
         <p><a href="${SERVER_URL}/report/${meetingId}" style="background:#1A2744;color:#C8A951;padding:12px 24px;text-decoration:none;font-weight:bold;border-radius:4px">Generate Profit Acceleration Report</a></p>
+        ${simulatorBtn}
         <br><p style="color:#888">Revenue Hounds Profit Assessment System</p>
       `
     });
@@ -572,6 +881,19 @@ app.post('/analyse/:meetingId', async (req, res) => {
     const analysis = await analyseTranscript(assessment.transcript);
     assessmentStore[meetingId].analysis = analysis;
 
+    let simulatorData = null;
+    try {
+      simulatorData = await extractSimulatorData(analysis);
+      assessmentStore[meetingId].simulatorData = simulatorData;
+      console.log('Phase 2 POST: Simulator data extracted for:', assessment.title);
+    } catch (simErr) {
+      console.error('Phase 2 POST: Simulator extraction failed (non-fatal):', simErr.message);
+    }
+
+    const simulatorBtn = simulatorData
+      ? `<p style="margin-top:12px"><a href="${SERVER_URL}/simulator/${meetingId}" style="background:#C8A951;color:#1A2744;padding:12px 24px;text-decoration:none;font-weight:bold;border-radius:4px">Open Profit Simulator</a></p>`
+      : '';
+
     await transporter.sendMail({
       from: GMAIL_USER,
       to: NOTIFY_EMAIL,
@@ -584,6 +906,7 @@ app.post('/analyse/:meetingId', async (req, res) => {
         <pre style="font-family:Arial;font-size:14px;white-space:pre-wrap">${analysis}</pre>
         <hr>
         <p><a href="${SERVER_URL}/report/${meetingId}" style="background:#1A2744;color:#C8A951;padding:12px 24px;text-decoration:none;font-weight:bold;border-radius:4px">Generate Profit Acceleration Report</a></p>
+        ${simulatorBtn}
         <br><p style="color:#888">Revenue Hounds Profit Assessment System</p>
       `
     });
@@ -669,6 +992,23 @@ app.post('/report/:meetingId', async (req, res) => {
   } catch (err) {
     console.error('Phase 3 POST error:', err.message);
   }
+});
+
+// Simulator: pre-populated interactive profit calculator
+app.get('/simulator/:meetingId', (req, res) => {
+  const { meetingId } = req.params;
+  const assessment = assessmentStore[meetingId];
+
+  if (!assessment || !assessment.simulatorData) {
+    return res.send(`<html><body style="font-family:Arial;padding:40px;max-width:600px">
+      <h2 style="color:#1A2744">Simulator Not Available</h2>
+      <p>The simulator data for this session could not be found. This usually means the server was restarted since the analysis was run.</p>
+      <p style="margin-top:16px">To regenerate it, click the <strong>Generate Profit Analysis</strong> button in the original email again.</p>
+      <p style="color:#888;margin-top:24px">Revenue Hounds Profit Assessment System</p>
+    </body></html>`);
+  }
+
+  res.send(buildSimulatorHtml(assessment.simulatorData, meetingId));
 });
 
 // ── Start ────────────────────────────────────────────────────────────────────
