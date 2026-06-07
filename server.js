@@ -1211,7 +1211,7 @@ app.get('/analyse/:meetingId', async (req, res) => {
     await saveAssessment(meetingId, { ...assessment, analysis, simulatorData });
 
     const simulatorBtn = simulatorData
-      ? `<p style="margin-top:12px"><a href="${SERVER_URL}/simulator/${meetingId}" style="background:#C8A951;color:#1A2744;padding:12px 24px;text-decoration:none;font-weight:bold;border-radius:4px">Open Profit Simulator</a></p>`
+      ? `<p style="margin-top:20px"><a href="${SERVER_URL}/simulator/${meetingId}" style="background:#C8A951;color:#1A2744;padding:12px 24px;text-decoration:none;font-weight:bold;border-radius:4px;display:inline-block">Open Profit Simulator</a></p>`
       : '';
 
     await transporter.sendMail({
@@ -1226,7 +1226,7 @@ app.get('/analyse/:meetingId', async (req, res) => {
         <pre style="font-family:Arial;font-size:14px;white-space:pre-wrap">${analysis}</pre>
         <hr>
         <p>When you are ready to generate the client-facing Profit Acceleration Report, click below:</p>
-        <p><a href="${SERVER_URL}/report/${meetingId}" style="background:#1A2744;color:#C8A951;padding:12px 24px;text-decoration:none;font-weight:bold;border-radius:4px">Generate Profit Acceleration Report</a></p>
+        <p style="margin-bottom:0"><a href="${SERVER_URL}/report/${meetingId}" style="background:#1A2744;color:#C8A951;padding:12px 24px;text-decoration:none;font-weight:bold;border-radius:4px;display:inline-block">Generate Profit Acceleration Report</a></p>
         ${simulatorBtn}
         <br><p style="color:#888">Revenue Hounds Profit Assessment System</p>
       `
@@ -1266,7 +1266,7 @@ app.post('/analyse/:meetingId', async (req, res) => {
     await saveAssessment(meetingId, { ...assessment, analysis, simulatorData });
 
     const simulatorBtn = simulatorData
-      ? `<p style="margin-top:12px"><a href="${SERVER_URL}/simulator/${meetingId}" style="background:#C8A951;color:#1A2744;padding:12px 24px;text-decoration:none;font-weight:bold;border-radius:4px">Open Profit Simulator</a></p>`
+      ? `<p style="margin-top:20px"><a href="${SERVER_URL}/simulator/${meetingId}" style="background:#C8A951;color:#1A2744;padding:12px 24px;text-decoration:none;font-weight:bold;border-radius:4px;display:inline-block">Open Profit Simulator</a></p>`
       : '';
 
     await transporter.sendMail({
@@ -1280,7 +1280,8 @@ app.post('/analyse/:meetingId', async (req, res) => {
         <hr>
         <pre style="font-family:Arial;font-size:14px;white-space:pre-wrap">${analysis}</pre>
         <hr>
-        <p><a href="${SERVER_URL}/report/${meetingId}" style="background:#1A2744;color:#C8A951;padding:12px 24px;text-decoration:none;font-weight:bold;border-radius:4px">Generate Profit Acceleration Report</a></p>
+        <p>When you are ready to generate the client-facing Profit Acceleration Report, click below:</p>
+        <p style="margin-bottom:0"><a href="${SERVER_URL}/report/${meetingId}" style="background:#1A2744;color:#C8A951;padding:12px 24px;text-decoration:none;font-weight:bold;border-radius:4px;display:inline-block">Generate Profit Acceleration Report</a></p>
         ${simulatorBtn}
         <br><p style="color:#888">Revenue Hounds Profit Assessment System</p>
       `
