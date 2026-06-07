@@ -2,6 +2,7 @@ const express = require('express');
 const fetch = require('node-fetch');
 const nodemailer = require('nodemailer');
 const crypto = require('crypto');
+const { Pool } = require('pg');
 
 const app = express();
 app.use(express.json());
@@ -14,8 +15,145 @@ const {
   GMAIL_APP_PASSWORD,
   NOTIFY_EMAIL,
   SERVER_URL = 'https://profit-assessment-server.up.railway.app',
-  ADMIN_PASSWORD = 'changeme'
+  ADMIN_PASSWORD = 'changeme',
+  DATABASE_URL
 } = process.env;
+
+// ── Database ──────────────────────────────────────────────────────────────────
+
+const pool = DATABASE_URL
+  ? new Pool({ connectionString: DATABASE_URL, ssl: { rejectUnauthorized: false } })
+  : null;
+
+async function initDb() {
+  if (!pool) { console.log('No DATABASE_URL — running without Postgres'); return; }
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS assessments (
+      meeting_id TEXT PRIMARY KEY,
+      title TEXT,
+      transcript TEXT,
+      analysis TEXT,
+      simulator_data JSONB,
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    )
+  `);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS questionnaires (
+      token TEXT PRIMARY KEY,
+      client_name TEXT,
+      company_name TEXT,
+      industry TEXT,
+      client_email TEXT,
+      created_at TIMESTAMPTZ,
+      submitted BOOLEAN DEFAULT FALSE,
+      responses JSONB
+    )
+  `);
+  console.log('Database tables ready');
+}
+
+// ── In-memory caches (write-through to Postgres) ──────────────────────────────
+const assessmentStore = {};
+const questionnaireStore = {};
+
+// ── DB helpers ────────────────────────────────────────────────────────────────
+
+async function saveAssessment(meetingId, data) {
+  assessmentStore[meetingId] = data;
+  if (!pool) return;
+  try {
+    await pool.query(
+      `INSERT INTO assessments (meeting_id, title, transcript, analysis, simulator_data)
+       VALUES ($1, $2, $3, $4, $5)
+       ON CONFLICT (meeting_id) DO UPDATE SET
+         title        = EXCLUDED.title,
+         transcript   = EXCLUDED.transcript,
+         analysis     = EXCLUDED.analysis,
+         simulator_data = EXCLUDED.simulator_data`,
+      [
+        meetingId,
+        data.title || null,
+        data.transcript || null,
+        data.analysis || null,
+        data.simulatorData ? JSON.stringify(data.simulatorData) : null
+      ]
+    );
+  } catch (err) {
+    console.error('DB saveAssessment error:', err.message);
+  }
+}
+
+async function getAssessment(meetingId) {
+  if (assessmentStore[meetingId]) return assessmentStore[meetingId];
+  if (!pool) return null;
+  try {
+    const result = await pool.query('SELECT * FROM assessments WHERE meeting_id = $1', [meetingId]);
+    if (!result.rows[0]) return null;
+    const row = result.rows[0];
+    const data = {
+      title: row.title,
+      transcript: row.transcript,
+      analysis: row.analysis,
+      simulatorData: row.simulator_data   // pg parses JSONB automatically
+    };
+    assessmentStore[meetingId] = data;    // warm the cache
+    return data;
+  } catch (err) {
+    console.error('DB getAssessment error:', err.message);
+    return null;
+  }
+}
+
+async function saveQuestionnaire(token, data) {
+  questionnaireStore[token] = data;
+  if (!pool) return;
+  try {
+    await pool.query(
+      `INSERT INTO questionnaires
+         (token, client_name, company_name, industry, client_email, created_at, submitted, responses)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+       ON CONFLICT (token) DO UPDATE SET
+         submitted = EXCLUDED.submitted,
+         responses = EXCLUDED.responses`,
+      [
+        token,
+        data.clientName  || null,
+        data.companyName || null,
+        data.industry    || null,
+        data.clientEmail || null,
+        data.createdAt   || new Date().toISOString(),
+        data.submitted   || false,
+        data.responses   ? JSON.stringify(data.responses) : null
+      ]
+    );
+  } catch (err) {
+    console.error('DB saveQuestionnaire error:', err.message);
+  }
+}
+
+async function getQuestionnaire(token) {
+  if (questionnaireStore[token]) return questionnaireStore[token];
+  if (!pool) return null;
+  try {
+    const result = await pool.query('SELECT * FROM questionnaires WHERE token = $1', [token]);
+    if (!result.rows[0]) return null;
+    const row = result.rows[0];
+    const data = {
+      clientName:  row.client_name,
+      companyName: row.company_name,
+      industry:    row.industry,
+      clientEmail: row.client_email,
+      createdAt:   row.created_at,
+      submitted:   row.submitted,
+      responses:   row.responses       // pg parses JSONB automatically
+    };
+    questionnaireStore[token] = data;  // warm the cache
+    return data;
+  } catch (err) {
+    console.error('DB getQuestionnaire error:', err.message);
+    return null;
+  }
+}
 
 // ── Auth helpers ─────────────────────────────────────────────────────────────
 
@@ -700,14 +838,6 @@ recalc();
 </html>`;
 }
 
-// ── In-memory store for pending assessments ──────────────────────────────────
-// Maps meetingId -> { title, transcript, analysis, simulatorData }
-const assessmentStore = {};
-
-// ── In-memory store for prospect questionnaires ───────────────────────────────
-// Maps token -> { clientName, companyName, industry, clientEmail, createdAt, submitted, responses }
-const questionnaireStore = {};
-
 // ── Questionnaire HTML builder ────────────────────────────────────────────────
 
 function buildQuestionnaireHtml(token, data) {
@@ -900,8 +1030,6 @@ function buildThankYouHtml(clientName) {
 
 // ── Routes ───────────────────────────────────────────────────────────────────
 
-// ── Auth routes ───────────────────────────────────────────────────────────────
-
 app.get('/', (req, res) => {
   if (parseCookies(req).rh_auth === getAuthToken()) return res.redirect('/admin');
   res.redirect('/login');
@@ -964,15 +1092,16 @@ app.get('/prep', requireAuth, async (req, res) => {
     // If client email provided, generate questionnaire token and send to prospect
     if (clientEmail) {
       const token = crypto.randomBytes(20).toString('hex');
-      questionnaireStore[token] = {
-        clientName: client || '',
+
+      await saveQuestionnaire(token, {
+        clientName:  client || '',
         companyName: company || '',
         industry,
         clientEmail,
-        createdAt: new Date().toISOString(),
-        submitted: false,
-        responses: null
-      };
+        createdAt:  new Date().toISOString(),
+        submitted:  false,
+        responses:  null
+      });
 
       const questionnaireUrl = `${SERVER_URL}/questionnaire/${token}`;
 
@@ -1027,7 +1156,8 @@ app.post('/webhook/fireflies', async (req, res) => {
 
   try {
     const { title, text } = await fetchTranscript(meetingId);
-    assessmentStore[meetingId] = { title, transcript: text, analysis: null };
+
+    await saveAssessment(meetingId, { title, transcript: text, analysis: null, simulatorData: null });
 
     console.log('Phase 1: Transcript fetched for:', title);
 
@@ -1061,7 +1191,7 @@ app.get('/analyse/:meetingId', async (req, res) => {
   </body></html>`);
 
   const { meetingId } = req.params;
-  const assessment = assessmentStore[meetingId];
+  const assessment = await getAssessment(meetingId);
   if (!assessment) {
     console.error('Phase 2 GET: No assessment found for meeting:', meetingId);
     return;
@@ -1069,17 +1199,16 @@ app.get('/analyse/:meetingId', async (req, res) => {
 
   try {
     const analysis = await analyseTranscript(assessment.transcript);
-    assessmentStore[meetingId].analysis = analysis;
 
-    // Extract simulator data in parallel (uses Haiku — fast and cheap)
     let simulatorData = null;
     try {
       simulatorData = await extractSimulatorData(analysis);
-      assessmentStore[meetingId].simulatorData = simulatorData;
       console.log('Phase 2 GET: Simulator data extracted for:', assessment.title);
     } catch (simErr) {
       console.error('Phase 2 GET: Simulator extraction failed (non-fatal):', simErr.message);
     }
+
+    await saveAssessment(meetingId, { ...assessment, analysis, simulatorData });
 
     const simulatorBtn = simulatorData
       ? `<p style="margin-top:12px"><a href="${SERVER_URL}/simulator/${meetingId}" style="background:#C8A951;color:#1A2744;padding:12px 24px;text-decoration:none;font-weight:bold;border-radius:4px">Open Profit Simulator</a></p>`
@@ -1114,7 +1243,7 @@ app.post('/analyse/:meetingId', async (req, res) => {
   res.sendStatus(200);
 
   const { meetingId } = req.params;
-  const assessment = assessmentStore[meetingId];
+  const assessment = await getAssessment(meetingId);
 
   if (!assessment) {
     console.error('Phase 2 POST: No assessment found for meeting:', meetingId);
@@ -1125,16 +1254,16 @@ app.post('/analyse/:meetingId', async (req, res) => {
 
   try {
     const analysis = await analyseTranscript(assessment.transcript);
-    assessmentStore[meetingId].analysis = analysis;
 
     let simulatorData = null;
     try {
       simulatorData = await extractSimulatorData(analysis);
-      assessmentStore[meetingId].simulatorData = simulatorData;
       console.log('Phase 2 POST: Simulator data extracted for:', assessment.title);
     } catch (simErr) {
       console.error('Phase 2 POST: Simulator extraction failed (non-fatal):', simErr.message);
     }
+
+    await saveAssessment(meetingId, { ...assessment, analysis, simulatorData });
 
     const simulatorBtn = simulatorData
       ? `<p style="margin-top:12px"><a href="${SERVER_URL}/simulator/${meetingId}" style="background:#C8A951;color:#1A2744;padding:12px 24px;text-decoration:none;font-weight:bold;border-radius:4px">Open Profit Simulator</a></p>`
@@ -1172,7 +1301,7 @@ app.get('/report/:meetingId', async (req, res) => {
   </body></html>`);
 
   const { meetingId } = req.params;
-  const assessment = assessmentStore[meetingId];
+  const assessment = await getAssessment(meetingId);
   if (!assessment || !assessment.analysis) {
     console.error('Phase 3 GET: No analysis found for meeting:', meetingId);
     return;
@@ -1207,7 +1336,7 @@ app.post('/report/:meetingId', async (req, res) => {
   res.sendStatus(200);
 
   const { meetingId } = req.params;
-  const assessment = assessmentStore[meetingId];
+  const assessment = await getAssessment(meetingId);
 
   if (!assessment || !assessment.analysis) {
     console.error('Phase 3 POST: No analysis found for meeting:', meetingId);
@@ -1241,9 +1370,9 @@ app.post('/report/:meetingId', async (req, res) => {
 });
 
 // Prospect questionnaire: serve the form
-app.get('/questionnaire/:token', (req, res) => {
+app.get('/questionnaire/:token', async (req, res) => {
   const { token } = req.params;
-  const q = questionnaireStore[token];
+  const q = await getQuestionnaire(token);
 
   if (!q) {
     return res.send(`<html><body style="font-family:Arial;padding:40px;max-width:560px">
@@ -1262,14 +1391,13 @@ app.get('/questionnaire/:token', (req, res) => {
 // Prospect questionnaire: handle submission
 app.post('/questionnaire/:token', async (req, res) => {
   const { token } = req.params;
-  const q = questionnaireStore[token];
+  const q = await getQuestionnaire(token);
 
   if (!q) return res.status(404).send('Questionnaire not found.');
 
-  // Store responses
   const responses = req.body;
-  questionnaireStore[token].submitted = true;
-  questionnaireStore[token].responses = responses;
+
+  await saveQuestionnaire(token, { ...q, submitted: true, responses });
 
   // Show thank you immediately
   res.send(buildThankYouHtml(q.clientName));
@@ -1409,12 +1537,12 @@ Frankie: What's stopped you from being more profitable so far?
 Client: Time and knowing where to start. I know the problems but I'm too busy billing to fix them.
   `;
 
-  assessmentStore[meetingId] = {
+  await saveAssessment(meetingId, {
     title: 'John Smith — Smith & Associates (TEST)',
     transcript: sampleTranscript,
     analysis: null,
     simulatorData: null
-  };
+  });
 
   res.send(`<html><body style="font-family:Arial;padding:40px;max-width:600px">
     <h2 style="color:#1A2744">Test transcript loaded.</h2>
@@ -1438,7 +1566,7 @@ Client: Time and knowing where to start. I know the problems but I'm too busy bi
         <br><p style="color:#888">Revenue Hounds Profit Assessment System</p>
       `
     });
-    console.log('Test transcript loaded, meetingId:', meetingId);
+    console.log('Test transcript loaded and saved to DB, meetingId:', meetingId);
   } catch (err) {
     console.error('Test email error:', err.message);
   }
@@ -1472,9 +1600,9 @@ app.get('/simulator/demo', requireAuth, (req, res) => {
 });
 
 // Simulator: pre-populated interactive profit calculator
-app.get('/simulator/:meetingId', (req, res) => {
+app.get('/simulator/:meetingId', async (req, res) => {
   const { meetingId } = req.params;
-  const assessment = assessmentStore[meetingId];
+  const assessment = await getAssessment(meetingId);
 
   if (!assessment || !assessment.simulatorData) {
     return res.send(`<html><body style="font-family:Arial;padding:40px;max-width:600px">
@@ -1491,4 +1619,13 @@ app.get('/simulator/:meetingId', (req, res) => {
 // ── Start ────────────────────────────────────────────────────────────────────
 
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`JumpStart 30 Profit Assessment Server listening on port ${PORT}`));
+
+initDb()
+  .then(() => {
+    app.listen(PORT, () => console.log(`JumpStart 30 Profit Assessment Server listening on port ${PORT}`));
+  })
+  .catch(err => {
+    console.error('DB init failed:', err.message);
+    // Start anyway — server degrades gracefully to in-memory only
+    app.listen(PORT, () => console.log(`JumpStart 30 Profit Assessment Server listening on port ${PORT} (no DB)`));
+  });
