@@ -86,12 +86,14 @@ function adminPage(success) {
   <div class="wrap">
     <div class="header"><h1>Revenue Hounds</h1><p>JumpStart 30 — Pre-Call Interview Guide</p></div>
     <div class="body">
-      ${success ? `<div class="success">Guide requested. Check your email in approximately 60 seconds.</div>` : ''}
+      ${success ? `<div class="success">Interview guide sent to you. Prospect questionnaire sent to the client. Both should arrive within 60 seconds.</div>` : ''}
       <form method="GET" action="/prep">
         <label for="client">Client Name</label>
         <input type="text" id="client" name="client" placeholder="e.g. John Smith" required>
         <label for="company">Company / Firm Name</label>
         <input type="text" id="company" name="company" placeholder="e.g. Smith &amp; Associates">
+        <label for="clientEmail">Client Email</label>
+        <input type="text" id="clientEmail" name="clientEmail" placeholder="e.g. john@smithassociates.com">
         <label for="industry">Industry</label>
         <select id="industry" name="industry" onchange="document.getElementById('other-wrap').style.display=this.value==='Other'?'block':'none'" required>
           <option value="">— Select industry —</option>
@@ -702,6 +704,200 @@ recalc();
 // Maps meetingId -> { title, transcript, analysis, simulatorData }
 const assessmentStore = {};
 
+// ── In-memory store for prospect questionnaires ───────────────────────────────
+// Maps token -> { clientName, companyName, industry, clientEmail, createdAt, submitted, responses }
+const questionnaireStore = {};
+
+// ── Questionnaire HTML builder ────────────────────────────────────────────────
+
+function buildQuestionnaireHtml(token, data) {
+  const { clientName, companyName, industry } = data;
+  const greeting = clientName ? `Hi ${clientName.split(' ')[0]},` : 'Hello,';
+
+  return `<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Profit Assessment — Pre-Call Questionnaire</title>
+<style>
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{font-family:Arial,sans-serif;background:#f0f2f5;min-height:100vh}
+  .topbar{background:#1A2744;padding:18px 28px}
+  .topbar h1{color:#C8A951;font-size:18px;font-weight:bold}
+  .topbar p{color:#7a8fb0;font-size:12px;margin-top:3px}
+  .container{max-width:640px;margin:32px auto;padding:0 16px 48px}
+  .intro{background:#fff;border-radius:8px;padding:28px;margin-bottom:20px;border:1px solid #dde0e8}
+  .intro p{font-size:14px;color:#333;line-height:1.7;margin-bottom:10px}
+  .intro p:last-child{margin-bottom:0}
+  .card{background:#fff;border-radius:8px;padding:28px;margin-bottom:16px;border:1px solid #dde0e8}
+  .card-title{font-size:12px;font-weight:bold;color:#1A2744;text-transform:uppercase;letter-spacing:0.6px;margin-bottom:20px;padding-bottom:10px;border-bottom:2px solid #C8A951}
+  .field{margin-bottom:18px}
+  .field:last-child{margin-bottom:0}
+  label{display:block;font-size:13px;font-weight:bold;color:#333;margin-bottom:6px}
+  .hint{font-size:11px;color:#999;margin-bottom:6px}
+  input[type=number],input[type=text],textarea,select{width:100%;padding:10px 12px;border:1px solid #ddd;border-radius:4px;font-size:14px;color:#333;font-family:Arial,sans-serif}
+  input[type=number]:focus,input[type=text]:focus,textarea:focus,select:focus{outline:none;border-color:#1A2744}
+  textarea{resize:vertical;min-height:72px}
+  .radio-group{display:flex;gap:10px;flex-wrap:wrap}
+  .radio-group label{display:flex;align-items:center;gap:6px;font-weight:normal;font-size:13px;cursor:pointer;padding:8px 14px;border:1px solid #ddd;border-radius:4px;flex:1;min-width:100px;justify-content:center}
+  .radio-group input[type=radio]{width:auto;margin:0}
+  .radio-group label:has(input:checked){background:#1A2744;color:#C8A951;border-color:#1A2744}
+  .yn-group{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}
+  .yn-group label{display:flex;align-items:center;gap:6px;font-weight:normal;font-size:13px;cursor:pointer;padding:8px 10px;border:1px solid #ddd;border-radius:4px;justify-content:center}
+  .yn-group input[type=radio]{width:auto;margin:0}
+  .yn-group label:has(input:checked){background:#1A2744;color:#C8A951;border-color:#1A2744}
+  .prefix{display:flex;align-items:center;gap:8px}
+  .prefix span{font-size:15px;font-weight:bold;color:#1A2744;min-width:16px}
+  .prefix input{flex:1}
+  .submit-btn{width:100%;background:#1A2744;color:#C8A951;border:none;padding:15px;border-radius:6px;font-size:15px;font-weight:bold;cursor:pointer;margin-top:8px}
+  .submit-btn:hover{background:#243660}
+  .required{color:#c0392b;margin-left:2px}
+</style>
+</head>
+<body>
+<div class="topbar">
+  <h1>Revenue Hounds</h1>
+  <p>JumpStart 30 — Profit Assessment Pre-Call Questionnaire</p>
+</div>
+
+<div class="container">
+  <div class="intro">
+    <p>${greeting} Thank you for booking a JumpStart 30 Profit Assessment.</p>
+    <p>Before our call, please take 5 minutes to answer the questions below. Your answers help us hit the ground running and make the most of our 30 minutes together. There are no right or wrong answers — ballpark figures are fine.</p>
+    ${companyName ? `<p style="color:#1A2744;font-weight:bold">${companyName}${industry ? ' &nbsp;·&nbsp; ' + industry : ''}</p>` : ''}
+  </div>
+
+  <form method="POST" action="/questionnaire/${token}">
+
+    <div class="card">
+      <div class="card-title">Your Business Financials</div>
+      <div class="hint" style="margin-bottom:16px;font-size:12px;color:#888">Ballpark figures are fine. Last financial year.</div>
+
+      <div class="field">
+        <label>Annual Gross Revenue <span class="required">*</span></label>
+        <div class="hint">Your total revenue before any deductions</div>
+        <div class="prefix"><span>$</span><input type="number" name="revenue" placeholder="e.g. 2000000" min="0" required></div>
+      </div>
+
+      <div class="field">
+        <label>Gross Profit <span class="required">*</span></label>
+        <div class="hint">Revenue minus direct costs (staff, materials, direct expenses)</div>
+        <div class="prefix"><span>$</span><input type="number" name="gross_profit" placeholder="e.g. 1200000" min="0" required></div>
+      </div>
+
+      <div class="field">
+        <label>Net Profit <span class="required">*</span></label>
+        <div class="hint">What you keep after all expenses including overhead, salaries, and your own draw</div>
+        <div class="prefix"><span>$</span><input type="number" name="net_profit" placeholder="e.g. 320000" min="0" required></div>
+      </div>
+
+      <div class="field">
+        <label>Revenue Trend — Last 3 Years</label>
+        <div class="radio-group">
+          <label><input type="radio" name="trend" value="Growing"> Growing</label>
+          <label><input type="radio" name="trend" value="Steady"> Steady</label>
+          <label><input type="radio" name="trend" value="Declining"> Declining</label>
+        </div>
+      </div>
+
+      <div class="field">
+        <label>Years in Business</label>
+        <input type="number" name="years_in_business" placeholder="e.g. 8" min="0" max="100">
+      </div>
+
+      <div class="field">
+        <label>Number of Employees (approximate)</label>
+        <input type="number" name="employees" placeholder="e.g. 6" min="0">
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-title">Your Biggest Challenges</div>
+      <div class="hint" style="margin-bottom:16px;font-size:12px;color:#888">What are the three most pressing problems in your business right now?</div>
+
+      <div class="field">
+        <label>Challenge 1 <span class="required">*</span></label>
+        <textarea name="challenge_1" placeholder="e.g. Revenue has plateaued for the past two years" required></textarea>
+      </div>
+      <div class="field">
+        <label>Challenge 2</label>
+        <textarea name="challenge_2" placeholder="e.g. Margins are thinner than they should be"></textarea>
+      </div>
+      <div class="field">
+        <label>Challenge 3</label>
+        <textarea name="challenge_3" placeholder="e.g. No consistent system for generating new leads"></textarea>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-title">Quick Business Health Check</div>
+      <div class="hint" style="margin-bottom:16px;font-size:12px;color:#888">Yes / No / Not sure — answer instinctively.</div>
+
+      ${[
+        ['q_mdp',       'Do you have a clear, documented position that sets you apart from competitors?'],
+        ['q_pricing',   'Have you reviewed and updated your pricing in the last 12 months?'],
+        ['q_upsell',    'Do you systematically offer additional services to existing clients?'],
+        ['q_leads',     'Do you have a predictable, structured system for generating new leads?'],
+        ['q_followup',  'Do you follow up with prospects who enquire but do not immediately proceed?'],
+      ].map(([name, question]) => `
+      <div class="field">
+        <label>${question}</label>
+        <div class="yn-group">
+          <label><input type="radio" name="${name}" value="Yes"> Yes</label>
+          <label><input type="radio" name="${name}" value="No"> No</label>
+          <label><input type="radio" name="${name}" value="Not sure"> Not sure</label>
+        </div>
+      </div>`).join('')}
+
+      <div class="field" style="margin-top:20px">
+        <label>Anything else you would like me to know before the call?</label>
+        <textarea name="additional" placeholder="Optional — any context that would be helpful"></textarea>
+      </div>
+    </div>
+
+    <button class="submit-btn" type="submit">Submit My Answers</button>
+  </form>
+</div>
+</body>
+</html>`;
+}
+
+function buildThankYouHtml(clientName) {
+  return `<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Thank You — Revenue Hounds</title>
+<style>
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{font-family:Arial,sans-serif;background:#f0f2f5;min-height:100vh;display:flex;flex-direction:column}
+  .topbar{background:#1A2744;padding:18px 28px}
+  .topbar h1{color:#C8A951;font-size:18px;font-weight:bold}
+  .topbar p{color:#7a8fb0;font-size:12px;margin-top:3px}
+  .container{max-width:560px;margin:48px auto;padding:0 16px;text-align:center}
+  .card{background:#fff;border-radius:8px;padding:40px 32px;border:1px solid #dde0e8}
+  .check{width:56px;height:56px;background:#1A2744;border-radius:50%;display:flex;align-items:center;justify-content:center;margin:0 auto 20px;font-size:24px;color:#C8A951}
+  h2{color:#1A2744;font-size:22px;margin-bottom:12px}
+  p{color:#555;font-size:14px;line-height:1.7;margin-bottom:10px}
+</style>
+</head>
+<body>
+<div class="topbar"><h1>Revenue Hounds</h1><p>JumpStart 30 — Profit Assessment</p></div>
+<div class="container">
+  <div class="card">
+    <div class="check">&#10003;</div>
+    <h2>Thank you${clientName ? ', ' + clientName.split(' ')[0] : ''}.</h2>
+    <p>Your answers have been received. We will review them before our call so we can make the most of the time together.</p>
+    <p>See you soon.</p>
+    <p style="margin-top:24px;font-size:12px;color:#aaa">Revenue Hounds &nbsp;·&nbsp; Unlock the profit already inside your firm.</p>
+  </div>
+</div>
+</body>
+</html>`;
+}
+
 // ── Routes ───────────────────────────────────────────────────────────────────
 
 // ── Auth routes ───────────────────────────────────────────────────────────────
@@ -732,19 +928,20 @@ app.get('/admin', requireAuth, (req, res) => {
 
 // Pre-call prep: GET /prep?client=Name&industry=law+firm
 app.get('/prep', requireAuth, async (req, res) => {
-  const { client, company, industry } = req.query;
+  const { client, company, clientEmail, industry } = req.query;
 
   if (!industry) return res.redirect('/admin');
 
-  // Redirect back immediately so the user sees the success state
   res.redirect('/admin?success=1');
 
   const label = [client, company ? `(${company})` : ''].filter(Boolean).join(' ');
   console.log(`Pre-call prep requested: client=${label || 'not specified'}, industry=${industry}`);
 
   try {
+    // Generate interview guide for Frankie
     const guide = await generateInterviewGuide(client, company, industry);
 
+    // Send interview guide to Frankie
     await transporter.sendMail({
       from: GMAIL_USER,
       to: NOTIFY_EMAIL,
@@ -754,6 +951,7 @@ app.get('/prep', requireAuth, async (req, res) => {
         ${client ? `<p><strong>Client:</strong> ${client}</p>` : ''}
         ${company ? `<p><strong>Company:</strong> ${company}</p>` : ''}
         <p><strong>Industry:</strong> ${industry}</p>
+        ${clientEmail ? `<p><strong>Prospect questionnaire sent to:</strong> ${clientEmail}</p>` : '<p><em>No client email provided — prospect questionnaire not sent.</em></p>'}
         <hr>
         <pre style="font-family:Arial;font-size:14px;white-space:pre-wrap">${guide}</pre>
         <hr>
@@ -762,6 +960,54 @@ app.get('/prep', requireAuth, async (req, res) => {
     });
 
     console.log(`Pre-call guide emailed for industry: ${industry}`);
+
+    // If client email provided, generate questionnaire token and send to prospect
+    if (clientEmail) {
+      const token = crypto.randomBytes(20).toString('hex');
+      questionnaireStore[token] = {
+        clientName: client || '',
+        companyName: company || '',
+        industry,
+        clientEmail,
+        createdAt: new Date().toISOString(),
+        submitted: false,
+        responses: null
+      };
+
+      const questionnaireUrl = `${SERVER_URL}/questionnaire/${token}`;
+
+      // Email to prospect
+      await transporter.sendMail({
+        from: GMAIL_USER,
+        to: clientEmail,
+        subject: `Before our call — a few quick questions from Revenue Hounds`,
+        html: `
+          <div style="font-family:Arial;max-width:560px;margin:0 auto">
+            <div style="background:#1A2744;padding:24px 32px">
+              <h1 style="color:#C8A951;margin:0;font-size:20px">Revenue Hounds</h1>
+              <p style="color:#7a8fb0;margin:4px 0 0;font-size:13px">JumpStart 30 — Profit Assessment</p>
+            </div>
+            <div style="padding:32px;background:#fff">
+              <p style="font-size:15px;color:#333">Hi ${client ? client.split(' ')[0] : 'there'},</p>
+              <p style="font-size:14px;color:#555;margin-top:12px;line-height:1.7">Thank you for booking a JumpStart 30 Profit Assessment. To make the most of our 30 minutes together, I have put together a short pre-call questionnaire.</p>
+              <p style="font-size:14px;color:#555;margin-top:8px;line-height:1.7">It takes about 5 minutes. Ballpark figures are fine — there are no wrong answers.</p>
+              <p style="margin-top:28px">
+                <a href="${questionnaireUrl}" style="background:#1A2744;color:#C8A951;padding:13px 28px;text-decoration:none;font-weight:bold;border-radius:4px;font-size:14px;display:inline-block">
+                  Complete My Pre-Call Questionnaire
+                </a>
+              </p>
+              <p style="font-size:12px;color:#aaa;margin-top:24px">If the button does not work, copy and paste this link into your browser:<br>${questionnaireUrl}</p>
+            </div>
+            <div style="padding:16px 32px;background:#fafafa;border-top:1px solid #eee;font-size:12px;color:#aaa;text-align:center">
+              Revenue Hounds &nbsp;·&nbsp; Unlock the profit already inside your firm.
+            </div>
+          </div>
+        `
+      });
+
+      console.log(`Prospect questionnaire sent to: ${clientEmail}, token: ${token}`);
+    }
+
   } catch (err) {
     console.error('Pre-call prep error:', err.message);
   }
@@ -991,6 +1237,97 @@ app.post('/report/:meetingId', async (req, res) => {
     console.log('Phase 3 POST: Report email sent for:', assessment.title);
   } catch (err) {
     console.error('Phase 3 POST error:', err.message);
+  }
+});
+
+// Prospect questionnaire: serve the form
+app.get('/questionnaire/:token', (req, res) => {
+  const { token } = req.params;
+  const q = questionnaireStore[token];
+
+  if (!q) {
+    return res.send(`<html><body style="font-family:Arial;padding:40px;max-width:560px">
+      <h2 style="color:#1A2744">Link not found</h2>
+      <p>This questionnaire link is invalid or has expired. Please contact Revenue Hounds directly.</p>
+    </body></html>`);
+  }
+
+  if (q.submitted) {
+    return res.send(buildThankYouHtml(q.clientName));
+  }
+
+  res.send(buildQuestionnaireHtml(token, q));
+});
+
+// Prospect questionnaire: handle submission
+app.post('/questionnaire/:token', async (req, res) => {
+  const { token } = req.params;
+  const q = questionnaireStore[token];
+
+  if (!q) return res.status(404).send('Questionnaire not found.');
+
+  // Store responses
+  const responses = req.body;
+  questionnaireStore[token].submitted = true;
+  questionnaireStore[token].responses = responses;
+
+  // Show thank you immediately
+  res.send(buildThankYouHtml(q.clientName));
+
+  // Format and email responses to Frankie
+  try {
+    const fmt = (val) => val ? val : '—';
+    const fmtMoney = (val) => val ? '$' + Number(val).toLocaleString('en-US') : '—';
+    const label = [q.clientName, q.companyName].filter(Boolean).join(' — ');
+
+    const html = `
+      <p><strong>Pre-call questionnaire completed by your prospect.</strong></p>
+      ${q.clientName ? `<p><strong>Client:</strong> ${q.clientName}</p>` : ''}
+      ${q.companyName ? `<p><strong>Company:</strong> ${q.companyName}</p>` : ''}
+      ${q.industry ? `<p><strong>Industry:</strong> ${q.industry}</p>` : ''}
+      <hr>
+
+      <h3 style="color:#1A2744;margin:20px 0 10px">Financials</h3>
+      <table style="border-collapse:collapse;width:100%;font-family:Arial;font-size:14px">
+        <tr><td style="padding:8px 12px;background:#f5f5f5;font-weight:bold;width:200px">Annual Gross Revenue</td><td style="padding:8px 12px;border-bottom:1px solid #eee">${fmtMoney(responses.revenue)}</td></tr>
+        <tr><td style="padding:8px 12px;background:#f5f5f5;font-weight:bold">Gross Profit</td><td style="padding:8px 12px;border-bottom:1px solid #eee">${fmtMoney(responses.gross_profit)}</td></tr>
+        <tr><td style="padding:8px 12px;background:#f5f5f5;font-weight:bold">Net Profit</td><td style="padding:8px 12px;border-bottom:1px solid #eee">${fmtMoney(responses.net_profit)}</td></tr>
+        <tr><td style="padding:8px 12px;background:#f5f5f5;font-weight:bold">Revenue Trend</td><td style="padding:8px 12px;border-bottom:1px solid #eee">${fmt(responses.trend)}</td></tr>
+        <tr><td style="padding:8px 12px;background:#f5f5f5;font-weight:bold">Years in Business</td><td style="padding:8px 12px;border-bottom:1px solid #eee">${fmt(responses.years_in_business)}</td></tr>
+        <tr><td style="padding:8px 12px;background:#f5f5f5;font-weight:bold">Employees</td><td style="padding:8px 12px">${fmt(responses.employees)}</td></tr>
+      </table>
+
+      <h3 style="color:#1A2744;margin:20px 0 10px">Biggest Challenges</h3>
+      <table style="border-collapse:collapse;width:100%;font-family:Arial;font-size:14px">
+        <tr><td style="padding:8px 12px;background:#f5f5f5;font-weight:bold;width:200px">Challenge 1</td><td style="padding:8px 12px;border-bottom:1px solid #eee">${fmt(responses.challenge_1)}</td></tr>
+        <tr><td style="padding:8px 12px;background:#f5f5f5;font-weight:bold">Challenge 2</td><td style="padding:8px 12px;border-bottom:1px solid #eee">${fmt(responses.challenge_2)}</td></tr>
+        <tr><td style="padding:8px 12px;background:#f5f5f5;font-weight:bold">Challenge 3</td><td style="padding:8px 12px">${fmt(responses.challenge_3)}</td></tr>
+      </table>
+
+      <h3 style="color:#1A2744;margin:20px 0 10px">Quick Health Check</h3>
+      <table style="border-collapse:collapse;width:100%;font-family:Arial;font-size:14px">
+        <tr><td style="padding:8px 12px;background:#f5f5f5;font-weight:bold;width:200px">Clear market position?</td><td style="padding:8px 12px;border-bottom:1px solid #eee">${fmt(responses.q_mdp)}</td></tr>
+        <tr><td style="padding:8px 12px;background:#f5f5f5;font-weight:bold">Pricing reviewed recently?</td><td style="padding:8px 12px;border-bottom:1px solid #eee">${fmt(responses.q_pricing)}</td></tr>
+        <tr><td style="padding:8px 12px;background:#f5f5f5;font-weight:bold">Upselling existing clients?</td><td style="padding:8px 12px;border-bottom:1px solid #eee">${fmt(responses.q_upsell)}</td></tr>
+        <tr><td style="padding:8px 12px;background:#f5f5f5;font-weight:bold">Structured lead generation?</td><td style="padding:8px 12px;border-bottom:1px solid #eee">${fmt(responses.q_leads)}</td></tr>
+        <tr><td style="padding:8px 12px;background:#f5f5f5;font-weight:bold">Following up non-converters?</td><td style="padding:8px 12px;border-bottom:1px solid #eee">${fmt(responses.q_followup)}</td></tr>
+      </table>
+
+      ${responses.additional ? `<h3 style="color:#1A2744;margin:20px 0 10px">Additional Notes</h3><p style="font-family:Arial;font-size:14px;padding:12px;background:#f9f9f9;border-left:3px solid #C8A951">${responses.additional}</p>` : ''}
+
+      <br><p style="color:#888;font-size:13px">Revenue Hounds Profit Assessment System</p>
+    `;
+
+    await transporter.sendMail({
+      from: GMAIL_USER,
+      to: NOTIFY_EMAIL,
+      subject: `Pre-Call Questionnaire Completed — ${label || q.clientEmail}`,
+      html
+    });
+
+    console.log(`Questionnaire responses received from: ${q.clientEmail}`);
+  } catch (err) {
+    console.error('Questionnaire submission email error:', err.message);
   }
 });
 
