@@ -298,13 +298,34 @@ function adminPage(success) {
     'Financial Planning', 'Real Estate Agency', 'Insurance', 'Consulting',
     'Construction', 'Retail', 'Restaurant / Hospitality', 'Other'
   ];
+
+  if (success) {
+    return `<!DOCTYPE html><html><head><title>Revenue Hounds — Sent</title><style>${STYLES}
+    .check-circle { width: 56px; height: 56px; background: #1A2744; border-radius: 50%; display: flex; align-items: center; justify-content: center; margin: 0 auto 20px; font-size: 26px; color: #C8A951; }
+    .confirm-title { color: #1A2744; font-size: 20px; font-weight: bold; text-align: center; margin-bottom: 10px; }
+    .confirm-sub { color: #555; font-size: 14px; text-align: center; line-height: 1.6; margin-bottom: 28px; }
+    .btn-outline { display: block; text-align: center; margin-top: 16px; padding: 12px; border: 2px solid #1A2744; border-radius: 4px; color: #1A2744; font-size: 14px; font-weight: bold; text-decoration: none; }
+    .btn-outline:hover { background: #f0f4ff; }
+    </style></head><body>
+    <div class="wrap">
+      <div class="header"><h1>Revenue Hounds</h1><p>JumpStart 30 — Pre-Call Interview Guide</p></div>
+      <div class="body">
+        <div class="check-circle">&#10003;</div>
+        <div class="confirm-title">You are all set.</div>
+        <div class="confirm-sub">Your interview guide is on its way. The prospect questionnaire has been sent to the client. Both should arrive within 60 seconds.</div>
+        <button class="btn" onclick="window.location='/admin'">Prep Another Client</button>
+        <a class="btn-outline" href="/test">Run Pipeline Test</a>
+      </div>
+      <div class="footer"><a href="/logout" style="color:#aaa;text-decoration:none">Sign out</a> &nbsp;·&nbsp; Revenue Hounds Profit Assessment System</div>
+    </div>
+  </body></html>`;
+  }
+
   return `<!DOCTYPE html><html><head><title>Revenue Hounds — Pre-Call Prep</title><style>${STYLES}
-  .success { background: #f0fff4; border: 1px solid #b2dfdb; color: #1b5e20; padding: 10px 14px; border-radius: 4px; font-size: 13px; margin-bottom: 20px; }
   </style></head><body>
   <div class="wrap">
     <div class="header"><h1>Revenue Hounds</h1><p>JumpStart 30 — Pre-Call Interview Guide</p></div>
     <div class="body">
-      ${success ? `<div class="success">Interview guide sent to you. Prospect questionnaire sent to the client. Both should arrive within 60 seconds.</div>` : ''}
       <form method="GET" action="/prep">
         <label for="client">Client Name</label>
         <input type="text" id="client" name="client" placeholder="e.g. John Smith" required>
