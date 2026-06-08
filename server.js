@@ -155,6 +155,86 @@ async function getQuestionnaire(token) {
   }
 }
 
+// ── GoHighLevel integration ───────────────────────────────────────────────────
+
+async function ghlRequest(method, path, body = null) {
+  const key = process.env.GHL_API_KEY;
+  if (!key) return null;
+  try {
+    const response = await fetch(`https://services.leadconnectorhq.com${path}`, {
+      method,
+      headers: {
+        'Authorization': `Bearer ${key}`,
+        'Version': '2021-07-28',
+        'Content-Type': 'application/json',
+        'Accept': 'application/json'
+      },
+      ...(body ? { body: JSON.stringify(body) } : {})
+    });
+    return response.json();
+  } catch (err) {
+    console.error('GHL API error:', err.message);
+    return null;
+  }
+}
+
+async function ghlFindOrCreateContact(clientName, clientEmail, companyName, industry) {
+  const locationId = process.env.GHL_LOCATION_ID;
+  if (!process.env.GHL_API_KEY || !clientEmail || !locationId) return null;
+  try {
+    const search = await ghlRequest('GET', `/contacts/search/duplicate?locationId=${locationId}&email=${encodeURIComponent(clientEmail)}`);
+
+    const nameParts = (clientName || '').trim().split(/\s+/);
+    const firstName = nameParts[0] || '';
+    const lastName   = nameParts.slice(1).join(' ') || '';
+
+    const payload = {
+      locationId,
+      firstName,
+      lastName,
+      email: clientEmail,
+      companyName: companyName || '',
+      tags: ['Profit Assessment', industry].filter(Boolean)
+    };
+
+    if (search?.contact?.id) {
+      await ghlRequest('PUT', `/contacts/${search.contact.id}`, payload);
+      console.log('GHL: Updated contact', search.contact.id);
+      return search.contact.id;
+    } else {
+      const result = await ghlRequest('POST', `/contacts/`, payload);
+      const contactId = result?.contact?.id;
+      console.log('GHL: Created contact', contactId);
+      return contactId;
+    }
+  } catch (err) {
+    console.error('GHL findOrCreateContact error:', err.message);
+    return null;
+  }
+}
+
+async function ghlAddNote(contactId, noteText) {
+  if (!contactId || !noteText) return;
+  try {
+    await ghlRequest('POST', `/contacts/${contactId}/notes`, { body: noteText });
+    console.log('GHL: Note added to contact', contactId);
+  } catch (err) {
+    console.error('GHL addNote error:', err.message);
+  }
+}
+
+async function ghlFindContactByName(name) {
+  const locationId = process.env.GHL_LOCATION_ID;
+  if (!process.env.GHL_API_KEY || !name || !locationId) return null;
+  try {
+    const result = await ghlRequest('GET', `/contacts/?locationId=${locationId}&query=${encodeURIComponent(name)}&limit=5`);
+    return result?.contacts?.[0]?.id || null;
+  } catch (err) {
+    console.error('GHL findContactByName error:', err.message);
+    return null;
+  }
+}
+
 // ── Auth helpers ─────────────────────────────────────────────────────────────
 
 function getAuthToken() {
@@ -1327,6 +1407,24 @@ app.get('/report/:meetingId', async (req, res) => {
     });
 
     console.log('Phase 3 GET: Report email sent for:', assessment.title);
+
+    // GHL: add report note (non-fatal)
+    try {
+      const titleName = assessment.title.split(/[—–-]/)[0].trim().replace(/\s*\(TEST\)\s*/i, '').trim();
+      const contactId = await ghlFindContactByName(titleName);
+      if (contactId) {
+        await ghlAddNote(contactId,
+          `PROFIT ACCELERATION REPORT GENERATED\n\n` +
+          `Date: ${new Date().toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' })}\n\n` +
+          `JumpStart 30 Profit Acceleration Report has been prepared for ${assessment.title}. ` +
+          `Report covers all 12 profit levers with compounded projection and 30/60/90 day roadmap. ` +
+          `Next step: book Profit Acceleration Simulator session.`
+        );
+        console.log('Phase 3 GET: GHL note added for:', titleName);
+      }
+    } catch (ghlErr) {
+      console.error('Phase 3 GET GHL note error (non-fatal):', ghlErr.message);
+    }
   } catch (err) {
     console.error('Phase 3 GET error:', err.message);
   }
@@ -1365,6 +1463,24 @@ app.post('/report/:meetingId', async (req, res) => {
     });
 
     console.log('Phase 3 POST: Report email sent for:', assessment.title);
+
+    // GHL: add report note (non-fatal)
+    try {
+      const titleName = assessment.title.split(/[—–-]/)[0].trim().replace(/\s*\(TEST\)\s*/i, '').trim();
+      const contactId = await ghlFindContactByName(titleName);
+      if (contactId) {
+        await ghlAddNote(contactId,
+          `PROFIT ACCELERATION REPORT GENERATED\n\n` +
+          `Date: ${new Date().toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' })}\n\n` +
+          `JumpStart 30 Profit Acceleration Report has been prepared for ${assessment.title}. ` +
+          `Report covers all 12 profit levers with compounded projection and 30/60/90 day roadmap. ` +
+          `Next step: book Profit Acceleration Simulator session.`
+        );
+        console.log('Phase 3 POST: GHL note added for:', titleName);
+      }
+    } catch (ghlErr) {
+      console.error('Phase 3 POST GHL note error (non-fatal):', ghlErr.message);
+    }
   } catch (err) {
     console.error('Phase 3 POST error:', err.message);
   }
@@ -1402,6 +1518,43 @@ app.post('/questionnaire/:token', async (req, res) => {
 
   // Show thank you immediately
   res.send(buildThankYouHtml(q.clientName));
+
+  // GHL: create/update contact and add questionnaire note (non-fatal)
+  try {
+    const contactId = await ghlFindOrCreateContact(q.clientName, q.clientEmail, q.companyName, q.industry);
+    if (contactId) {
+      const fmtMoney = v => v ? '$' + Number(v).toLocaleString('en-US') : 'Not provided';
+      const fmt      = v => v || '—';
+      const noteText = [
+        'PRE-CALL QUESTIONNAIRE RESPONSES',
+        `Submitted: ${new Date().toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' })}`,
+        '',
+        'FINANCIALS',
+        `Annual Revenue:  ${fmtMoney(responses.revenue)}`,
+        `Gross Profit:    ${fmtMoney(responses.gross_profit)}`,
+        `Net Profit:      ${fmtMoney(responses.net_profit)}`,
+        `Revenue Trend:   ${fmt(responses.trend)}`,
+        `Years in Business: ${fmt(responses.years_in_business)}`,
+        `Employees:       ${fmt(responses.employees)}`,
+        '',
+        'BIGGEST CHALLENGES',
+        `1. ${fmt(responses.challenge_1)}`,
+        `2. ${fmt(responses.challenge_2)}`,
+        `3. ${fmt(responses.challenge_3)}`,
+        '',
+        'HEALTH CHECK',
+        `Clear market position:        ${fmt(responses.q_mdp)}`,
+        `Pricing reviewed recently:    ${fmt(responses.q_pricing)}`,
+        `Upselling existing clients:   ${fmt(responses.q_upsell)}`,
+        `Structured lead generation:   ${fmt(responses.q_leads)}`,
+        `Following up non-converters:  ${fmt(responses.q_followup)}`,
+        ...(responses.additional ? ['', `Additional notes: ${responses.additional}`] : [])
+      ].join('\n');
+      await ghlAddNote(contactId, noteText);
+    }
+  } catch (ghlErr) {
+    console.error('GHL questionnaire sync error (non-fatal):', ghlErr.message);
+  }
 
   // Format and email responses to Frankie
   try {
