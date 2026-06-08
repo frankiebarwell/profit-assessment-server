@@ -194,7 +194,7 @@ async function ghlFindOrCreateContact(clientName, clientEmail, companyName, indu
       lastName,
       email: clientEmail,
       companyName: companyName || '',
-      tags: ['Profit Assessment', industry].filter(Boolean)
+      tags: ['JumpStart 30', 'Profit Assessment', industry].filter(Boolean)
     };
 
     if (search?.contact?.id) {
@@ -216,8 +216,12 @@ async function ghlFindOrCreateContact(clientName, clientEmail, companyName, indu
 async function ghlAddNote(contactId, noteText) {
   if (!contactId || !noteText) return;
   try {
-    await ghlRequest('POST', `/contacts/${contactId}/notes`, { body: noteText });
-    console.log('GHL: Note added to contact', contactId);
+    const result = await ghlRequest('POST', `/contacts/${contactId}/notes`, { body: noteText, userId: '' });
+    if (result?.note?.id) {
+      console.log('GHL: Note added to contact', contactId, '— note ID:', result.note.id);
+    } else {
+      console.warn('GHL: Note call completed but no note ID returned:', JSON.stringify(result));
+    }
   } catch (err) {
     console.error('GHL addNote error:', err.message);
   }
